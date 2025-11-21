@@ -1,248 +1,178 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import numpy as np
-from db_manager import FundDBManager
-
-# --- SAYFA AYARLARI ---
-st.set_page_config(
-    page_title="Fon Portföy Takip Sistemi (v1.0)",
-    page_icon="📈",
-    layout="wide"
-)
-
-# --- CSS ÖZELLEŞTİRME (Opsiyonel Görsellik) ---
-st.markdown("""
-<style>
-    .metric-card {background-color: #f0f2f6; padding: 15px; border-radius: 10px;}
-</style>
-""", unsafe_allow_html=True)
-
-# --- BACKEND BAĞLANTISI ---
-@st.cache_resource
-def get_db_manager():
-    """
-    Veritabanı yöneticisini cache'ler. Böylece her tıklamada
-    yeniden DB oluşturup performansı düşürmez.
-    """
-    return FundDBManager()
-
-db = get_db_manager()
-
-# --- SIDEBAR (SOL MENÜ) ---
-st.sidebar.header("⚙️ Kontrol Paneli")
-st.sidebar.info("✓ Gerçek Veri Modu: Fintables + yfinance")
-
-# Fon Seçimi (sadece fund_sources.json'da linki olanlar)
+import yfinance as yf
+import requests
+from bs4 import BeautifulSoup
 import json
-def get_funds_with_links(json_path='fund_sources.json'):
-    try:
-        with open(json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        return [fon for fon, cfg in data.items() if cfg.get('fintables_url')]
-    except Exception:
-        return []
+import time
+import plotly.express as px
 
-fonlar_linkli = get_funds_with_links()
-secilen_fonlar = st.sidebar.multiselect(
-    "Takip Edilecek Fonlar",
-    options=fonlar_linkli,
-    default=fonlar_linkli[:2] if fonlar_linkli else None
-)
+# --- AYARLAR ---
+st.set_page_config(page_title="Fon Takip Radarı 3000", layout="wide", page_icon="🦈")
 
-# Tarih Aralığı
-gun_sayisi = st.sidebar.slider("Analiz Süresi (Gün)", 7, 90, 30)
+# Config Yükle
+def load_config():
+    # Demo amaçlı config'i burada tanımlıyorum. Normalde dosyadan okuruz.
+    return {
+        "base_url": "https://fintables.com/sirketler/{SYMBOL}/sirket-bilgileri",
+        "headers": {'User-Agent': 'Mozilla/5.0'},
+        "target_funds": ["TERA", "ATLAS", "HEDEF", "DENİZ"], # Aranan Fonlar
+        "watchlist": ["TRHOL", "IZFAS", "SMRVA", "GLRYH", "PEKGY", "TURSG"], # Takip Listesi
+        "selector": "div.flex.flex-col.overflow-x-auto.overflow-y-hidden" # Tablo kutusu
+    }
 
-st.sidebar.markdown("---")
-st.sidebar.caption("Geliştirici: Enes Uzun")
-
-# --- ANA EKRAN ---
-st.title("📊 Yatırım Fonu Hisse Takip Sistemi")
-st.markdown(f"""
-Bu dashboard, fonların **%5 ve üzeri** paya sahip olduğu hisselerdeki günlük değişimleri izler.
-""")
-
-if secilen_fonlar:
-    # Veriyi veritabanından çek
-    df = db.get_filtered_data(secilen_fonlar, gun_sayisi)
-
-    # -- Üst İstatistikler --
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Seçilen Fon", len(secilen_fonlar))
-    col1.caption("💡 Kaç fon izlediğiniz")
-    col2.metric("İlgili Hisse Sayısı", df["Hisse"].nunique())
-    col2.caption("📊 İzlenen toplam farklı hisse")
-    col3.metric("Toplam Veri Kaydı", len(df))
-    col3.caption("📝 Gün × Hisse kombinasyonlarının sayısı")
-    st.divider()
-
-    # -- Tablar --
-    tab1, tab2, tab3 = st.tabs(["📈 Trend Analizi", "📋 Veri Tablosu", "ℹ️ Mimari"])
-
-    with tab1:
-        st.subheader("Fon Pozisyon Değişim Grafiği")
-        st.markdown("""
-        **Bu sekmede:** Fonların portföyündeki hisselerin **pay oranı** (yüzde kaçlık pay sahibi olduğu) değişimini görürsünüz.
+# --- 1. MODÜL: FINTABLES SCRAPING (Lot Bulucu) ---
+def get_whale_data(config):
+    results = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    total = len(config['watchlist'])
+    
+    for i, symbol in enumerate(config['watchlist']):
+        status_text.text(f"🔍 Taranıyor: {symbol}...")
+        progress_bar.progress((i + 1) / total)
         
-        📌 **Terimler:**
-        - **Pay Oranı (%):** Fon toplam portföyünün yüzde kaçını bu hisse oluşturuyor? (örn. %5 = fonun 5'te 1'i bu hisse)
-        - **Tarih:** Verinin çekildiği gün
-        - **Fon Adı:** Hangi fon tarafından tutulduğu
-        """)
-        if not df.empty:
-            # Görünüm seçeneği: Mobilde okunması kolay 'Top Movers' varsayılan
-            view = st.selectbox("Görünüm", ["Top Movers", "Trend Çizgi"], index=0)
+        url = config['base_url'].format(SYMBOL=symbol)
+        try:
+            resp = requests.get(url, headers=config['headers'])
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.content, 'html.parser')
+                table = soup.select_one(config['selector'])
+                
+                if table:
+                    rows = table.select("table tbody tr")
+                    for row in rows:
+                        cols = row.select("td")
+                        if len(cols) >= 3:
+                            name = cols[0].text.strip()
+                            lot_txt = cols[1].text.strip()
+                            ratio_txt = cols[2].text.strip()
+                            
+                            # Hedef Fon Kontrolü
+                            for fund in config['target_funds']:
+                                if fund in name.upper():
+                                    # Lot Temizleme (3.055.350 -> 3055350)
+                                    lot_clean = float(lot_txt.replace('.', '').replace(',', '.'))
+                                    
+                                    results.append({
+                                        "Hisse": symbol,
+                                        "Fon Adı": name,
+                                        "Lot (Adet)": lot_clean,
+                                        "Pay Oranı": ratio_txt
+                                    })
+        except Exception as e:
+            st.error(f"Hata ({symbol}): {e}")
+        
+        time.sleep(0.5) # Fintables banlamasın diye minik bekleme
 
-            if view == "Top Movers":
-                # Her hisse için periyod başı / sonu değerlerine göre değişim hesapla
-                grp = df.sort_values("Tarih").groupby("Hisse")
-                first = grp.first()["Pay Oranı (%)"]
-                last = grp.last()["Pay Oranı (%)"]
-                # Sıfıra bölmeyi önlemek için 0 değerlerini NaN yap
-                first = first.replace(0, np.nan)
-                change = ((last - first) / first) * 100
-                change = change.dropna()
+    progress_bar.empty()
+    status_text.empty()
+    return pd.DataFrame(results)
 
-                if change.empty:
-                    st.info("Yeterli veri yok — Top Movers hesaplanamıyor.")
-                else:
-                    top_gainers = change.sort_values(ascending=False).head(5)
-                    top_losers = change.sort_values(ascending=True).head(5)
-
-                    df_gainers = pd.DataFrame({"Hisse": top_gainers.index, "Değişim (%)": top_gainers.values})
-                    df_losers = pd.DataFrame({"Hisse": top_losers.index, "Değişim (%)": top_losers.values})
-
-                    st.markdown("**🎯 En Çok Yükselenler vs En Çok Düşenler**")
-                    st.caption("Fon portföyünde pay oranı EN ÇOK artan/azalan hisseler (seçilen dönem içinde)")
-
-                    col_gain, col_loss = st.columns(2)
-
-                    with col_gain:
-                        st.markdown("**En Çok Yükselenler (Son dönem)**")
-                        fig_gain = px.bar(
-                            df_gainers,
-                            x="Değişim (%)",
-                            y="Hisse",
-                            orientation='h',
-                            color="Değişim (%)",
-                            color_continuous_scale='Greens',
-                            text=df_gainers["Değişim (%)"].round(2)
-                        )
-                        fig_gain.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
-                        fig_gain.update_traces(textposition='auto')
-                        st.plotly_chart(fig_gain, use_container_width=True, config={"displayModeBar": False})
-
-                    with col_loss:
-                        st.markdown("**En Çok Düşenler (Son dönem)**")
-                        fig_loss = px.bar(
-                            df_losers,
-                            x="Değişim (%)",
-                            y="Hisse",
-                            orientation='h',
-                            color="Değişim (%)",
-                            color_continuous_scale='Reds',
-                            text=df_losers["Değişim (%)"].round(2)
-                        )
-                        fig_loss.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
-                        fig_loss.update_traces(textposition='auto')
-                        st.plotly_chart(fig_loss, use_container_width=True, config={"displayModeBar": False})
-
+# --- 2. MODÜL: CANLI BORSA VERİSİ (Fiyat Bulucu) ---
+def enrich_with_market_data(df):
+    if df.empty:
+        return df
+    
+    st.info("📡 Canlı piyasa verileri çekiliyor (Yahoo Finance)...")
+    
+    # Hisse kodlarına .IS ekle (Yahoo formatı: TRHOL.IS)
+    symbols = [f"{s}.IS" for s in df['Hisse'].unique()]
+    
+    # Toplu veri çek
+    tickers = yf.Tickers(" ".join(symbols))
+    
+    current_prices = {}
+    daily_changes = {}
+    
+    for s in symbols:
+        try:
+            info = tickers.tickers[s].info
+            # 'currentPrice' yoksa 'regularMarketPrice' dene
+            price = info.get('currentPrice') or info.get('regularMarketPrice') or 0
+            
+            # Günlük Değişim (%)
+            prev_close = info.get('previousClose') or price
+            if prev_close:
+                change = ((price - prev_close) / prev_close) * 100
             else:
-                # Orijinal detaylı çizgi grafiği (mobil için de responsive)
-                st.markdown("**📈 Detaylı Grafik:** Seçili hisselerin gün gün pay oranı değişimini takip edin.")
-                fig = px.line(
-                    df,
-                    x="Tarih",
-                    y="Pay Oranı (%)",
-                    color="Hisse",
-                    line_dash="Fon Adı",
-                    markers=True,
-                    hover_data=["Tahmini Lot", "Kaynak"],
-                    title=f"Son {gun_sayisi} Günlük Pay Değişimi"
-                )
-                fig.update_traces(marker=dict(size=6))
-                fig.update_layout(
-                    height=450,
-                    autosize=True,
-                    template="plotly_white",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=20, r=20, t=60, b=20),
-                    title=dict(text=f"Son {gun_sayisi} Günlük Pay Değişimi", x=0.5, xanchor='center', font=dict(size=14)),
-                    hovermode="x unified"
-                )
+                change = 0
+                
+            clean_symbol = s.replace('.IS', '')
+            current_prices[clean_symbol] = price
+            daily_changes[clean_symbol] = change
+        except:
+            pass
+            
+    # DataFrame'e Ekle
+    df['Canlı Fiyat'] = df['Hisse'].map(current_prices)
+    df['Günlük Değ. %'] = df['Hisse'].map(daily_changes)
+    
+    # Portföy Değeri Hesapla (Lot * Fiyat)
+    df['Portföy Değeri (TL)'] = df['Lot (Adet)'] * df['Canlı Fiyat']
+    
+    return df
 
-                st.plotly_chart(
-                    fig,
-                    use_container_width=True,
-                    config={"responsive": True, "displayModeBar": False}
+# --- ARAYÜZ (FRONTEND) ---
+def main():
+    st.title("🦈 Hisse & Fon Balina Radarı")
+    st.markdown("Bu panel **Fintables**'dan sahiplik verisini, **Canlı Borsa**'dan fiyat verisini birleştirir.")
+    
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.subheader("⚙️ Ayarlar")
+        config = load_config()
+        st.write("**Hedef Fonlar:**")
+        st.code("\n".join(config['target_funds']))
+        st.write("**İzleme Listesi:**")
+        st.code(", ".join(config['watchlist']))
+        
+        btn_scan = st.button("🚀 Taramayı Başlat", type="primary")
+
+    with col2:
+        if btn_scan:
+            # 1. Adım: Balinaları Bul
+            df_whales = get_whale_data(config)
+            
+            if not df_whales.empty:
+                # 2. Adım: Fiyatları Çek ve Zenginleştir
+                df_final = enrich_with_market_data(df_whales)
+                
+                # --- METRİKLER ---
+                total_value = df_final['Portföy Değeri (TL)'].sum()
+                st.metric(label="💰 Toplam Tespit Edilen Varlık", value=f"{total_value:,.0f} TL")
+                
+                # --- ANA TABLO ---
+                st.subheader("📋 Detaylı Pozisyon Raporu")
+                
+                # Tabloyu Formatla
+                st.dataframe(
+                    df_final.style.format({
+                        "Lot (Adet)": "{:,.0f}",
+                        "Canlı Fiyat": "{:.2f} ₺",
+                        "Portföy Değeri (TL)": "{:,.0f} ₺",
+                        "Günlük Değ. %": "{:.2f}%"
+                    }).background_gradient(subset=['Günlük Değ. %'], cmap='RdYlGn'),
+                    use_container_width=True
                 )
+                
+                # --- GRAFİKLER ---
+                col_chart1, col_chart2 = st.columns(2)
+                
+                with col_chart1:
+                    fig_pie = px.pie(df_final, values='Portföy Değeri (TL)', names='Hisse', title='Hisse Bazlı Dağılım')
+                    st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with col_chart2:
+                    fig_bar = px.bar(df_final, x='Fon Adı', y='Portföy Değeri (TL)', color='Hisse', title='Fon Bazlı Büyüklük')
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                    
+            else:
+                st.warning("Seçilen hisselerde, belirtilen fonlara ait %5 üzeri bir kayıt bulunamadı.")
         else:
-            st.warning("Seçilen kriterlere uygun veri bulunamadı.")
+            st.info("Sol taraftaki butona basarak analizi başlatın.")
 
-    with tab2:
-        st.subheader("Detaylı Portföy Dökümü")
-        st.markdown("""
-        **Tüm veriler tablo halinde:**
-        
-        | Sütun | Anlamı |
-        |-------|--------|
-        | **Tarih** | Verinin çekildiği gün |
-        | **Fon Adı** | Hangi fon |
-        | **Hisse** | Hisse sembolü (örn. THYAO = Türk Hava Yolları) |
-        | **Pay Oranı (%)** | Portföyün % kaçını bu hisse oluşturuyor |
-        | **Tahmini Lot** | Fonda tutulan tahmini hisse adet sayısı (≈ pay oranı × portföy değeri / hisse fiyatı) |
-        | **Kaynak** | Verinin nereden geldiği (KAP = resmi bildirim, Aylık Rapor = fonun yayınladığı rapor) |
-        
-        ℹ️ **Yeşil satırlar** = Aylık rapordan gelen veriler
-        """)
-
-        # Kaynak sütununa göre satır renklendirme fonksiyonu
-        def highlight_source(val):
-            color = '#d4edda' if 'Aylık' in str(val) else ''
-            return f'background-color: {color}'
-
-        st.dataframe(
-            df.style.map(highlight_source, subset=['Kaynak']),
-            use_container_width=True,
-            height=400
-        )
-
-        # Excel İndirme
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "📥 Excel/CSV Olarak İndir",
-            data=csv,
-            file_name='fon_takip_verisi.csv',
-            mime='text/csv',
-            type="primary"
-        )
-        st.caption("💾 Tüm tabloyu Excel'e aktarıp kendi analizlerinizi yapabilirsiniz")
-
-    with tab3:
-        st.markdown("""
-        ### 🏗 Sistem Mimarisi & Kullanılan Kaynaklar
-        
-        #### 📌 Veri Kaynakları
-        1. **Fintables** (fintables.com)
-           - Fon portföy dağılımı (hangi hisse kaçlık pay)
-           - Otomatik olarak web sayfasından çekilir
-        2. **yfinance** (Yahoo Finance)
-           - Her hissenin gün bazlı kapanış fiyatları
-           - Grafiklerde kullanılabilir (gelecek güncellemede entegre edilecek)
-        
-        #### 🛠 Teknoloji Stack
-        - **Backend:** Python + SQLite (veri depolama)
-        - **Frontend:** Streamlit (web arayüzü)
-        - **Veri Çekme:** Playwright (JS sayfaları için) + pandas (tablo parse)
-        
-        #### 📊 Veri Güncellemesi
-        - Uygulama başladığında `fund_sources.json` dosyasındaki fonlar otomatik çekilir
-        - Manuel güncelleme: Terminalden `update_fund_sources_with_tickers()` fonksiyonu çalıştırabilirsiniz
-        
-        #### ⚙️ Konfigürasyon
-        - Fon listesi: `fund_sources.json` dosyasında tanımlı
-        - Yeni fon eklemek: JSON dosyasına Fintables linki ekleyip uygulamayı restart edin
-        """)
-
-else:
-    st.warning("👈 Lütfen sol menüden en az bir FON seçiniz.")
+if __name__ == "__main__":
+    main()
