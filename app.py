@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import numpy as np
 from db_manager import FundDBManager
 
 # --- SAYFA AYARLARI ---
@@ -69,18 +70,88 @@ if secilen_fonlar:
     with tab1:
         st.subheader("Fon Pozisyon Değişim Grafiği")
         if not df.empty:
-            fig = px.line(
-                df,
-                x="Tarih",
-                y="Pay Oranı (%)",
-                color="Hisse",
-                line_dash="Fon Adı",
-                markers=True,
-                hover_data=["Tahmini Lot", "Kaynak"],
-                title=f"Son {gun_sayisi} Günlük Pay Değişimi"
-            )
-            fig.update_layout(height=500)
-            st.plotly_chart(fig, use_container_width=True)
+            # Görünüm seçeneği: Mobilde okunması kolay 'Top Movers' varsayılan
+            view = st.selectbox("Görünüm", ["Top Movers", "Trend Çizgi"], index=0)
+
+            if view == "Top Movers":
+                # Her hisse için periyod başı / sonu değerlerine göre değişim hesapla
+                grp = df.sort_values("Tarih").groupby("Hisse")
+                first = grp.first()["Pay Oranı (%)"]
+                last = grp.last()["Pay Oranı (%)"]
+                # Sıfıra bölmeyi önlemek için 0 değerlerini NaN yap
+                first = first.replace(0, np.nan)
+                change = ((last - first) / first) * 100
+                change = change.dropna()
+
+                if change.empty:
+                    st.info("Yeterli veri yok — Top Movers hesaplanamıyor.")
+                else:
+                    top_gainers = change.sort_values(ascending=False).head(5)
+                    top_losers = change.sort_values(ascending=True).head(5)
+
+                    df_gainers = pd.DataFrame({"Hisse": top_gainers.index, "Değişim (%)": top_gainers.values})
+                    df_losers = pd.DataFrame({"Hisse": top_losers.index, "Değişim (%)": top_losers.values})
+
+                    col_gain, col_loss = st.columns(2)
+
+                    with col_gain:
+                        st.markdown("**En Çok Yükselenler (Son dönem)**")
+                        fig_gain = px.bar(
+                            df_gainers,
+                            x="Değişim (%)",
+                            y="Hisse",
+                            orientation='h',
+                            color="Değişim (%)",
+                            color_continuous_scale='Greens',
+                            text=df_gainers["Değişim (%)"].round(2)
+                        )
+                        fig_gain.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
+                        fig_gain.update_traces(textposition='auto')
+                        st.plotly_chart(fig_gain, use_container_width=True, config={"displayModeBar": False})
+
+                    with col_loss:
+                        st.markdown("**En Çok Düşenler (Son dönem)**")
+                        fig_loss = px.bar(
+                            df_losers,
+                            x="Değişim (%)",
+                            y="Hisse",
+                            orientation='h',
+                            color="Değişim (%)",
+                            color_continuous_scale='Reds',
+                            text=df_losers["Değişim (%)"].round(2)
+                        )
+                        fig_loss.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
+                        fig_loss.update_traces(textposition='auto')
+                        st.plotly_chart(fig_loss, use_container_width=True, config={"displayModeBar": False})
+
+            else:
+                # Orijinal detaylı çizgi grafiği (mobil için de responsive)
+                fig = px.line(
+                    df,
+                    x="Tarih",
+                    y="Pay Oranı (%)",
+                    color="Hisse",
+                    line_dash="Fon Adı",
+                    markers=True,
+                    hover_data=["Tahmini Lot", "Kaynak"],
+                    title=f"Son {gun_sayisi} Günlük Pay Değişimi"
+                )
+                fig.update_traces(marker=dict(size=6))
+                fig.update_layout(
+                    height=450,
+                    autosize=True,
+                    template="plotly_white",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=20, r=20, t=60, b=20),
+                    title=dict(text=f"Son {gun_sayisi} Günlük Pay Değişimi", x=0.5, xanchor='center', font=dict(size=14)),
+                    hovermode="x unified"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True,
+                    config={"responsive": True, "displayModeBar": False}
+                )
         else:
             st.warning("Seçilen kriterlere uygun veri bulunamadı.")
 
