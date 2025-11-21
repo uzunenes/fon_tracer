@@ -128,7 +128,7 @@ class FundDBManager:
             cursor.execute("SELECT DISTINCT fon_adi FROM portfoy_hareketleri ORDER BY fon_adi")
             return [row[0] for row in cursor.fetchall()]
 
-        def load_fund_sources(self, path: str = 'fund_sources.json') -> dict:
+    def load_fund_sources(self, path: str = 'fund_sources.json') -> dict:
             """
             `fund_sources.json` beklenen yapısı:
             {
@@ -144,7 +144,7 @@ class FundDBManager:
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
 
-        def auto_populate_from_sources(self, sources: dict, days: int = 30) -> None:
+    def auto_populate_from_sources(self, sources: dict, days: int = 30) -> None:
             """
             sources dict'inden çekim yapar ve veritabanını doldurur.
             """

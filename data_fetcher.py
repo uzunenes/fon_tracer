@@ -5,9 +5,6 @@ def extract_tickers_from_yandex(query: str, max_results: int = 10) -> list:
     Döndürür: ['THYAO.IS', 'ASELS.IS', ...]
     Not: Yandex'in resmi bir public API'si yoktur, bu fonksiyon HTML scraping ile çalışır.
     """
-    import requests
-    import re
-    from bs4 import BeautifulSoup
     url = f'https://yandex.com/quotes/search?text={query}'
     resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     resp.raise_for_status()
@@ -52,8 +49,6 @@ def update_fund_sources_with_tickers(json_path: str = 'fund_sources.json'):
     """
     fund_sources.json dosyasındaki her fon için tickers alanı yoksa veya boşsa, Fintables sayfasından otomatik doldurur.
     """
-    import json
-    import os
     if not os.path.exists(json_path):
         raise FileNotFoundError(f'{json_path} bulunamadı')
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -80,6 +75,10 @@ import datetime
 import pandas as pd
 import requests
 from typing import List
+import json
+import os
+import re
+from bs4 import BeautifulSoup
 
 try:
     # optional import; may fail if playwright not installed

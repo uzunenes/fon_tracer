@@ -31,7 +31,7 @@ db = get_db_manager()
 
 # --- SIDEBAR (SOL MENÜ) ---
 st.sidebar.header("⚙️ Kontrol Paneli")
-st.sidebar.info("Faz 1: Simülasyon Modu Aktif")
+st.sidebar.info("✓ Gerçek Veri Modu: Fintables + yfinance")
 
 # Fon Seçimi (sadece fund_sources.json'da linki olanlar)
 import json
@@ -69,8 +69,11 @@ if secilen_fonlar:
     # -- Üst İstatistikler --
     col1, col2, col3 = st.columns(3)
     col1.metric("Seçilen Fon", len(secilen_fonlar))
+    col1.caption("💡 Kaç fon izlediğiniz")
     col2.metric("İlgili Hisse Sayısı", df["Hisse"].nunique())
+    col2.caption("📊 İzlenen toplam farklı hisse")
     col3.metric("Toplam Veri Kaydı", len(df))
+    col3.caption("📝 Gün × Hisse kombinasyonlarının sayısı")
     st.divider()
 
     # -- Tablar --
@@ -78,6 +81,14 @@ if secilen_fonlar:
 
     with tab1:
         st.subheader("Fon Pozisyon Değişim Grafiği")
+        st.markdown("""
+        **Bu sekmede:** Fonların portföyündeki hisselerin **pay oranı** (yüzde kaçlık pay sahibi olduğu) değişimini görürsünüz.
+        
+        📌 **Terimler:**
+        - **Pay Oranı (%):** Fon toplam portföyünün yüzde kaçını bu hisse oluşturuyor? (örn. %5 = fonun 5'te 1'i bu hisse)
+        - **Tarih:** Verinin çekildiği gün
+        - **Fon Adı:** Hangi fon tarafından tutulduğu
+        """)
         if not df.empty:
             # Görünüm seçeneği: Mobilde okunması kolay 'Top Movers' varsayılan
             view = st.selectbox("Görünüm", ["Top Movers", "Trend Çizgi"], index=0)
@@ -100,6 +111,9 @@ if secilen_fonlar:
 
                     df_gainers = pd.DataFrame({"Hisse": top_gainers.index, "Değişim (%)": top_gainers.values})
                     df_losers = pd.DataFrame({"Hisse": top_losers.index, "Değişim (%)": top_losers.values})
+
+                    st.markdown("**🎯 En Çok Yükselenler vs En Çok Düşenler**")
+                    st.caption("Fon portföyünde pay oranı EN ÇOK artan/azalan hisseler (seçilen dönem içinde)")
 
                     col_gain, col_loss = st.columns(2)
 
@@ -135,6 +149,7 @@ if secilen_fonlar:
 
             else:
                 # Orijinal detaylı çizgi grafiği (mobil için de responsive)
+                st.markdown("**📈 Detaylı Grafik:** Seçili hisselerin gün gün pay oranı değişimini takip edin.")
                 fig = px.line(
                     df,
                     x="Tarih",
@@ -166,6 +181,20 @@ if secilen_fonlar:
 
     with tab2:
         st.subheader("Detaylı Portföy Dökümü")
+        st.markdown("""
+        **Tüm veriler tablo halinde:**
+        
+        | Sütun | Anlamı |
+        |-------|--------|
+        | **Tarih** | Verinin çekildiği gün |
+        | **Fon Adı** | Hangi fon |
+        | **Hisse** | Hisse sembolü (örn. THYAO = Türk Hava Yolları) |
+        | **Pay Oranı (%)** | Portföyün % kaçını bu hisse oluşturuyor |
+        | **Tahmini Lot** | Fonda tutulan tahmini hisse adet sayısı (≈ pay oranı × portföy değeri / hisse fiyatı) |
+        | **Kaynak** | Verinin nereden geldiği (KAP = resmi bildirim, Aylık Rapor = fonun yayınladığı rapor) |
+        
+        ℹ️ **Yeşil satırlar** = Aylık rapordan gelen veriler
+        """)
 
         # Kaynak sütununa göre satır renklendirme fonksiyonu
         def highlight_source(val):
@@ -187,19 +216,32 @@ if secilen_fonlar:
             mime='text/csv',
             type="primary"
         )
+        st.caption("💾 Tüm tabloyu Excel'e aktarıp kendi analizlerinizi yapabilirsiniz")
 
     with tab3:
         st.markdown("""
-        ### 🏗 Sistem Mimarisi (Faz 1)
-        Şu an **MVP (Minimum Viable Product)** aşamasındasınız.
-
-        1. **Backend:** Python + SQLite (Serverless Veritabanı)
-        2. **Frontend:** Streamlit
-        3. **Veri Kaynağı:** Simülasyon (Mock Data Generator)
-
-        **Faz 2 Planı:**
-        - `yfinance` entegrasyonu ile gerçek hisse fiyatları.
-        - KAP Scraper botu ile gerçek pay oranları.
+        ### 🏗 Sistem Mimarisi & Kullanılan Kaynaklar
+        
+        #### 📌 Veri Kaynakları
+        1. **Fintables** (fintables.com)
+           - Fon portföy dağılımı (hangi hisse kaçlık pay)
+           - Otomatik olarak web sayfasından çekilir
+        2. **yfinance** (Yahoo Finance)
+           - Her hissenin gün bazlı kapanış fiyatları
+           - Grafiklerde kullanılabilir (gelecek güncellemede entegre edilecek)
+        
+        #### 🛠 Teknoloji Stack
+        - **Backend:** Python + SQLite (veri depolama)
+        - **Frontend:** Streamlit (web arayüzü)
+        - **Veri Çekme:** Playwright (JS sayfaları için) + pandas (tablo parse)
+        
+        #### 📊 Veri Güncellemesi
+        - Uygulama başladığında `fund_sources.json` dosyasındaki fonlar otomatik çekilir
+        - Manuel güncelleme: Terminalden `update_fund_sources_with_tickers()` fonksiyonu çalıştırabilirsiniz
+        
+        #### ⚙️ Konfigürasyon
+        - Fon listesi: `fund_sources.json` dosyasında tanımlı
+        - Yeni fon eklemek: JSON dosyasına Fintables linki ekleyip uygulamayı restart edin
         """)
 
 else:
