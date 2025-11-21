@@ -33,12 +33,21 @@ db = get_db_manager()
 st.sidebar.header("⚙️ Kontrol Paneli")
 st.sidebar.info("Faz 1: Simülasyon Modu Aktif")
 
-# Fon Seçimi
-mevcut_fonlar = db.get_all_funds()
+# Fon Seçimi (sadece fund_sources.json'da linki olanlar)
+import json
+def get_funds_with_links(json_path='fund_sources.json'):
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return [fon for fon, cfg in data.items() if cfg.get('fintables_url')]
+    except Exception:
+        return []
+
+fonlar_linkli = get_funds_with_links()
 secilen_fonlar = st.sidebar.multiselect(
     "Takip Edilecek Fonlar",
-    options=mevcut_fonlar,
-    default=mevcut_fonlar[:2] if mevcut_fonlar else None
+    options=fonlar_linkli,
+    default=fonlar_linkli[:2] if fonlar_linkli else None
 )
 
 # Tarih Aralığı

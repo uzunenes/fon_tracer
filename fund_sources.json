@@ -1,0 +1,10 @@
+{
+  "ATLAS PORTFÖY": {
+    "fintables_url": "https://fintables.com/sirketler/ATLAS/sirket-bilgileri",
+    "tickers": ["THYAO.IS", "ASELS.IS"]
+  },
+  "TERA PORTFÖY": {
+    "fintables_url": "https://fintables.com/sirketler/TERA/sirket-bilgileri",
+    "tickers": ["KCHOL.IS", "GARAN.IS"]
+  }
+}
